@@ -14,6 +14,15 @@ window.DANE_DEMO = {
     { nr: 4, od: "10:45", przedmiot: "Język polski", sala: "1", zmiana: null },
     { nr: 5, od: "11:40", przedmiot: "WF", sala: "sala gimn.", zmiana: null },
   ],
+  planNastepny: {
+    tytul: "Jutro", data: "wtorek, 13 października",
+    lekcje: [
+      { nr: 1, od: "08:00", przedmiot: "Język polski", sala: "1", zmiana: null },
+      { nr: 2, od: "08:55", przedmiot: "Biologia", sala: "7", zmiana: null },
+      { nr: 3, od: "09:50", przedmiot: "Fizyka", sala: "14", zmiana: "zastępstwo: p. Nowak" },
+      { nr: 4, od: "10:45", przedmiot: "WF", sala: "sala gimn.", zmiana: null },
+    ],
+  },
   sprawdziany: [
     { data: "2026-10-15", przedmiot: "Matematyka", rodzaj: "sprawdzian", opis: "Funkcje liniowe" },
     { data: "2026-10-17", przedmiot: "Historia", rodzaj: "kartkówka", opis: "Dwudziestolecie" },

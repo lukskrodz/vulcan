@@ -70,23 +70,40 @@
       k.append(el("div", "pusto", "Brak lekcji."));
     }
     if (d.plan && d.plan.length) {
-      const lista = el("div", "wiersze");
+      const lista = listaLekcji(d.plan);
       lista.style.marginTop = "12px";
-      for (const l of d.plan) {
-        const w = el("div", "wiersz");
-        const odwolana = l.zmiana === "odwołana";
-        const glowny = el("div", "glowny");
-        const tytul = el("span", odwolana ? "tytul odwolana-tekst" : "tytul", l.przedmiot);
-        glowny.append(tytul);
-        if (l.sala) glowny.append(el("small", null, ` · ${l.sala}`));
-        w.append(el("span", "nr", String(l.nr)), el("span", "godz", l.od), glowny);
-        if (l.zmiana) {
-          w.append(el("span", `znacznik ${odwolana ? "odwolana" : "zmiana"}`, l.zmiana));
-        }
-        lista.append(w);
-      }
       k.append(lista);
     }
+    return k;
+  }
+
+  function listaLekcji(lekcje) {
+    const lista = el("div", "wiersze");
+    for (const l of lekcje) {
+      const w = el("div", "wiersz");
+      const odwolana = l.zmiana === "odwołana";
+      const glowny = el("div", "glowny");
+      const tytul = el("span", odwolana ? "tytul odwolana-tekst" : "tytul", l.przedmiot);
+      glowny.append(tytul);
+      if (l.sala) glowny.append(el("small", null, ` · ${l.sala}`));
+      w.append(el("span", "nr", String(l.nr)), el("span", "godz", l.od), glowny);
+      if (l.zmiana) {
+        w.append(el("span", `znacznik ${odwolana ? "odwolana" : "zmiana"}`, l.zmiana));
+      }
+      lista.append(w);
+    }
+    return lista;
+  }
+
+  // Plan najbliższego dnia nauki po dzisiejszym: "Jutro", a w piątek "Poniedziałek".
+  function rysujPlanNastepny(d) {
+    const n = d.planNastepny;
+    if (!n || !n.lekcje || !n.lekcje.length) return null;
+    const k = karta(n.tytul || "Następny dzień");
+    if (n.data) k.append(el("div", "pod", n.data));
+    const lista = listaLekcji(n.lekcje);
+    lista.style.marginTop = "8px";
+    k.append(lista);
     return k;
   }
 
@@ -225,7 +242,7 @@
     const s = $("#siatka");
     s.textContent = "";
     s.append(
-      rysujDzis(d),
+      ...[rysujDzis(d), rysujPlanNastepny(d)].filter(Boolean),
       rysujOceny(d),
       rysujListe("Sprawdziany", d.sprawdziany, "Brak zapowiedzianych sprawdzianów.", wierszZadania),
       rysujListe("Zadania", d.zadania, "Brak zadań.", wierszZadania),
@@ -274,12 +291,12 @@
         ? { dzien: "następny dzień nauki", godzina: pierwszaNast,
             przedmiot: atr("pierwsza_lekcja_nastepnego_dnia_nauki", "przedmiot") || "" }
         : null,
-      plan: [],  // pełny plan dnia bierz z karty kalendarza HA — patrz README
+      plan: [],  // uzupełnia planZKalendarza() z calendar.<uczeń>_plan_lekcji
       sprawdziany: (atr("najblizszy_sprawdzian", "wszystkie") || []).map((t) => {
         const m = String(t).match(/^(\S+)\s+(.*?)\s*(?:\((.*)\))?$/);
         return m ? { data: m[1], przedmiot: m[2], rodzaj: m[3] || "" } : { data: "", przedmiot: String(t) };
       }),
-      zadania: [],
+      zadania: [],  // uzupełnia zadaniaZKalendarza() z calendar.<uczeń>_sprawdziany_i_zadania
       srednia: liczba(we("oceny")?.state),
       skala: atr("oceny", "skala"),
       srednie: atr("oceny", "srednie") || {},
@@ -329,7 +346,79 @@
     if (!odp.ok) throw new Error(`Home Assistant odpowiedział ${odp.status}`);
     const lista = await odp.json();
     const stany = Object.fromEntries(lista.map((s) => [s.entity_id, s]));
-    return zStanow(stany, prefix.endsWith("_") ? prefix : `${prefix}_`);
+    const dane = zStanow(stany, prefix.endsWith("_") ? prefix : `${prefix}_`);
+    // Plan jest w kalendarzu, nie w stanach — błąd kalendarza nie może zabrać reszty pulpitu.
+    try { Object.assign(dane, await planZKalendarza(token)); } catch { /* zostaje bez planu */ }
+    try { Object.assign(dane, await zadaniaZKalendarza(token)); } catch { /* zostaje bez zadań */ }
+    return dane;
+  }
+
+  const DNI = ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"];
+  const dzien = (t) => `${t.getFullYear()}-${t.getMonth()}-${t.getDate()}`;
+
+  // Zdarzenie kalendarza integracji: "1 Matematyka", "Zmiana: 2 Chemia", "ODWOŁANA: 3 Historia".
+  function zLekcji(e) {
+    const start = new Date(e.start?.dateTime || e.start?.date || e.start);
+    if (Number.isNaN(start.getTime())) return null;
+    let t = String(e.summary || "");
+    let zmiana = null;
+    if (t.startsWith("ODWOŁANA: ")) { zmiana = "odwołana"; t = t.slice(10); }
+    else if (t.startsWith("Zmiana: ")) { zmiana = "zmiana"; t = t.slice(8); }
+    if (zmiana === "zmiana") {
+      const notka = String(e.description || "").split("\n")
+        .find((x) => x.trim() && !/^(Nauczyciel|Grupa):/.test(x));
+      if (notka) zmiana = notka.length > 40 ? `${notka.slice(0, 39)}…` : notka;
+    }
+    const m = t.match(/^(\d+)\s+(.*)$/);
+    return {
+      start, nr: m ? m[1] : "", przedmiot: m ? m[2] : t, sala: e.location || "",
+      od: start.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }), zmiana,
+    };
+  }
+
+  async function kalendarz(token, nazwa, dni, wstecz = 0) {
+    const id = prefix.replace(/_$/, "").replace(/^sensor\./, "calendar.") + nazwa;
+    const od = new Date(); od.setHours(0, 0, 0, 0); od.setDate(od.getDate() - wstecz);
+    const doDnia = new Date(od); doDnia.setDate(doDnia.getDate() + wstecz + dni);
+    const url = `${location.origin}/api/calendars/${id}`
+      + `?start=${encodeURIComponent(od.toISOString())}&end=${encodeURIComponent(doDnia.toISOString())}`;
+    const odp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!odp.ok) throw new Error(`kalendarz ${id}: ${odp.status}`);
+    return odp.json();
+  }
+
+  // Kalendarz "Sprawdziany i zadania": zdarzenia całodniowe "Zadanie: Przedmiot", treść w opisie.
+  async function zadaniaZKalendarza(token) {
+    // integracja trzyma zadania z 7 dni wstecz i 30 naprzód (WINDOW_HOMEWORK)
+    const zdarzenia = await kalendarz(token, "_sprawdziany_i_zadania", 31, 7);
+    const zadania = zdarzenia
+      .filter((e) => String(e.summary || "").startsWith("Zadanie: "))
+      .map((e) => ({
+        data: String(e.start?.date || e.start?.dateTime || e.start || "").slice(0, 10),
+        przedmiot: String(e.summary).slice(9),
+        opis: String(e.description || "").split("\n")[0].slice(0, 80),
+      }))
+      .sort((a, b) => a.data.localeCompare(b.data));
+    return { zadania };
+  }
+
+  async function planZKalendarza(token) {
+    const lekcje = (await kalendarz(token, "_plan_lekcji", 10))
+      .map(zLekcji).filter(Boolean).sort((a, b) => a.start - b.start);
+    const dzis = dzien(new Date());
+    const jutro = new Date(); jutro.setDate(jutro.getDate() + 1);
+    const nast = lekcje.find((l) => dzien(l.start) !== dzis);
+    if (!nast) return { plan: lekcje };
+    const t = nast.start;
+    const nazwa = DNI[t.getDay()];
+    return {
+      plan: lekcje.filter((l) => dzien(l.start) === dzis),
+      planNastepny: {
+        tytul: dzien(t) === dzien(jutro) ? "Jutro" : nazwa.charAt(0).toUpperCase() + nazwa.slice(1),
+        data: `${dzien(t) === dzien(jutro) ? nazwa + ", " : ""}${t.toLocaleDateString("pl-PL", { day: "numeric", month: "long" })}`,
+        lekcje: lekcje.filter((l) => dzien(l.start) === dzien(t)),
+      },
+    };
   }
 
   // --- start -----------------------------------------------------------------
