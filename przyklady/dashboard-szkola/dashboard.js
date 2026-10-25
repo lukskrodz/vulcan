@@ -87,9 +87,23 @@
       glowny.append(tytul);
       if (l.sala) glowny.append(el("small", null, ` · ${l.sala}`));
       w.append(el("span", "nr", String(l.nr)), el("span", "godz", l.od), glowny);
+      const znaczniki = el("span", "znaczniki");
       if (l.zmiana) {
-        w.append(el("span", `znacznik ${odwolana ? "odwolana" : "zmiana"}`, l.zmiana));
+        znaczniki.append(el("span", `znacznik ${odwolana ? "odwolana" : "zmiana"}`, l.zmiana));
       }
+      // zadanie albo sprawdzian z tego przedmiotu na ten dzień — treść w podpowiedzi
+      for (const o of l.obowiazki || []) {
+        const klasa = o.rodzaj === "zadanie" ? "zadanie" : "sprawdzian";
+        const z = el("span", `znacznik ${klasa}`, o.rodzaj);
+        if (o.opis) {
+          z.title = o.opis;
+          // na telefonie nie ma podpowiedzi po najechaniu — krótka treść pod lekcją
+          const krotko = o.opis.split("\n")[0];
+          glowny.append(el("span", `opis-obowiazku ${klasa}`, krotko.length > 70 ? `${krotko.slice(0, 69)}…` : krotko));
+        }
+        znaczniki.append(z);
+      }
+      if (znaczniki.childNodes.length) w.append(znaczniki);
       lista.append(w);
     }
     return lista;
@@ -350,6 +364,7 @@
     // Plan jest w kalendarzu, nie w stanach — błąd kalendarza nie może zabrać reszty pulpitu.
     try { Object.assign(dane, await planZKalendarza(token)); } catch { /* zostaje bez planu */ }
     try { Object.assign(dane, await zadaniaZKalendarza(token)); } catch { /* zostaje bez zadań */ }
+    przypnijObowiazki(dane);
     return dane;
   }
 
@@ -387,19 +402,44 @@
     return odp.json();
   }
 
-  // Kalendarz "Sprawdziany i zadania": zdarzenia całodniowe "Zadanie: Przedmiot", treść w opisie.
+  // Kalendarz "Sprawdziany i zadania": zdarzenia całodniowe "Zadanie: Przedmiot",
+  // "Kartkówka: Przedmiot", "Sprawdzian: Przedmiot"…, treść w opisie.
   async function zadaniaZKalendarza(token) {
     // integracja trzyma zadania z 7 dni wstecz i 30 naprzód (WINDOW_HOMEWORK)
     const zdarzenia = await kalendarz(token, "_sprawdziany_i_zadania", 31, 7);
-    const zadania = zdarzenia
-      .filter((e) => String(e.summary || "").startsWith("Zadanie: "))
-      .map((e) => ({
+    const obowiazki = zdarzenia.map((e) => {
+      const t = String(e.summary || "");
+      const i = t.indexOf(": ");
+      return {
         data: String(e.start?.date || e.start?.dateTime || e.start || "").slice(0, 10),
-        przedmiot: String(e.summary).slice(9),
+        rodzaj: (i > 0 ? t.slice(0, i) : "").toLowerCase(),
+        przedmiot: i > 0 ? t.slice(i + 2) : t,
         opis: String(e.description || "").split("\n")[0].slice(0, 80),
-      }))
-      .sort((a, b) => a.data.localeCompare(b.data));
-    return { zadania };
+        pelnyOpis: String(e.description || ""),
+      };
+    }).sort((a, b) => a.data.localeCompare(b.data));
+    const zadania = obowiazki.filter((o) => o.rodzaj === "zadanie")
+      .map(({ data, przedmiot, opis }) => ({ data, przedmiot, opis }));
+    return { zadania, obowiazki };
+  }
+
+  // Przypina zadania i sprawdziany do lekcji w planie: ten sam dzień i ten sam przedmiot.
+  // Przy dwóch lekcjach z jednego przedmiotu plakietka trafia tylko na pierwszą.
+  function przypnijObowiazki(dane) {
+    const obowiazki = dane.obowiazki || [];
+    if (!obowiazki.length) return;
+    const norm = (s) => String(s || "").trim().toLowerCase();
+    const iso = (t) => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    const lekcje = [...(dane.plan || []), ...((dane.planNastepny || {}).lekcje || [])];
+    const uzyte = new Set();
+    for (const l of lekcje) {
+      if (!l.start || l.zmiana === "odwołana") continue;
+      l.obowiazki = obowiazki.filter((o, i) => {
+        if (uzyte.has(i) || o.data !== iso(l.start) || norm(o.przedmiot) !== norm(l.przedmiot)) return false;
+        uzyte.add(i);
+        return true;
+      }).map((o) => ({ rodzaj: o.rodzaj, opis: o.pelnyOpis || o.opis }));
+    }
   }
 
   async function planZKalendarza(token) {

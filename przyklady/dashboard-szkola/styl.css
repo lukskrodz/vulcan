@@ -105,6 +105,12 @@ body {
 .znacznik.zmiana { color: var(--uwaga); }
 .znacznik.odwolana { color: var(--zly); }
 .znacznik.spoznienie { color: var(--uwaga); }
+.znacznik.zadanie { color: var(--akcent); cursor: help; }
+.znacznik.sprawdzian { color: var(--zly); cursor: help; }
+.znaczniki { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.opis-obowiazku { display: block; font-size: .8rem; margin-top: 2px; }
+.opis-obowiazku.zadanie { color: var(--akcent); }
+.opis-obowiazku.sprawdzian { color: var(--zly); }
 
 .odwolana-tekst { text-decoration: line-through; color: var(--tekst-slaby); }
 
